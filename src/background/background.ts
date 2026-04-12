@@ -8,43 +8,22 @@ import { McpCoordinator } from "./mcp/mcp-coordinator.js";
 let conversationHistory: Message[] = [];
 let bridgeSocket: WebSocket | null = null;
 
-// --- Tool Registry (for MCP tools) ---
+// --- MCP (additive, doesn't affect existing logic) ---
 const toolRegistry = new ToolRegistry();
 registerBuiltinTools(toolRegistry);
-
-// --- MCP Coordinator ---
 const mcpCoordinator = new McpCoordinator(toolRegistry);
 mcpCoordinator.initialize().catch(err => console.error("[MCP] Init failed:", err));
 
 // --- Bridge Connection ---
-let bridgeRetryDelay = 5000;
-const BRIDGE_MIN_DELAY = 5000;
-const BRIDGE_MAX_DELAY = 60000;
-
-async function probeBridge(): Promise<boolean> {
+function connectToBridge() {
   try {
-    const res = await fetch("http://localhost:3001/health", { method: "GET", signal: AbortSignal.timeout(2000) });
-    return res.ok;
+    bridgeSocket = new WebSocket("ws://localhost:3000");
   } catch {
-    return false;
-  }
-}
-
-async function connectToBridge() {
-  const alive = await probeBridge();
-  if (!alive) {
-    setTimeout(connectToBridge, bridgeRetryDelay);
-    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
+    setTimeout(connectToBridge, 5000);
     return;
   }
 
-  bridgeSocket = new WebSocket("ws://localhost:3000");
-
-  bridgeSocket.onopen = () => {
-    bridgeRetryDelay = BRIDGE_MIN_DELAY;
-    console.log("Connected to ChromeCode Bridge");
-    mcpCoordinator.onBridgeConnected(bridgeSocket!);
-  };
+  bridgeSocket.onopen = () => console.log("Connected to ChromeCode Bridge");
 
   bridgeSocket.onmessage = async (event) => {
     const data = JSON.parse(event.data);
@@ -57,51 +36,29 @@ async function connectToBridge() {
       });
       return;
     }
+    // Route MCP messages
     mcpCoordinator.onBridgeMessage(data);
   };
 
   bridgeSocket.onclose = () => {
+    console.log("Bridge disconnected. Retrying in 5s...");
     mcpCoordinator.onBridgeDisconnected();
-    setTimeout(connectToBridge, bridgeRetryDelay);
-    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
+    setTimeout(connectToBridge, 5000);
   };
 }
 
 connectToBridge();
 
-// --- Core Prompt Logic (preserved from original) ---
+// --- Core Prompt Logic (ORIGINAL, UNCHANGED) ---
 async function handlePrompt(text: string, onEvent: (event: any) => void) {
   try {
     const tabContent = await getActiveTabContent();
     const systemPrompt: Message = {
       role: "system",
-      content: `You are ChromeCode, a browser automation agent. You execute JavaScript in the active tab.
-
-When the user asks you to do something, you MUST respond with a JavaScript code block using EXACTLY this format:
-
+      content: `You are ChromeCode. You can see the active tab and perform Live Edits using:
 \`\`\`javascript:cc_live_edit
-// your code here
+// code
 \`\`\`
-
-For example, to navigate to a URL:
-\`\`\`javascript:cc_live_edit
-window.location.href = "https://en.wikipedia.org";
-\`\`\`
-
-To click a button:
-\`\`\`javascript:cc_live_edit
-document.querySelector("#myButton").click();
-\`\`\`
-
-To fill and submit a form:
-\`\`\`javascript:cc_live_edit
-document.querySelector("#search").value = "hello";
-document.querySelector("form").submit();
-\`\`\`
-
-NEVER say you cannot browse the web. You CAN navigate and interact with pages by writing JavaScript.
-ALWAYS respond with a \`\`\`javascript:cc_live_edit block.
-
 Context:
 ${tabContent}`
     };
@@ -118,7 +75,6 @@ ${tabContent}`
 
       conversationHistory.push({ role: "assistant", content: fullResponse });
 
-      // --- Original cc_live_edit handling (unchanged) ---
       const editMatch = fullResponse.match(/```javascript:cc_live_edit\s*([\s\S]*?)```/i);
       if (editMatch && editMatch[1]) {
         const result = await editActiveTab(editMatch[1].trim());
@@ -128,23 +84,6 @@ ${tabContent}`
         } else {
           onEvent({ type: "text_delta", delta: `\n\n❌ Error: ${result.error}\nFixing...` });
           await runLoop(`The edit failed: ${result.error}. Fix it.`);
-          return;
-        }
-      }
-
-      // --- MCP tool handling (new, only fires for ```tool:xxx``` blocks) ---
-      const toolCalls = parseToolCalls(fullResponse).filter(c => c.name !== "cc_live_edit");
-      for (const call of toolCalls) {
-        const registered = toolRegistry.get(call.name);
-        if (!registered) {
-          onEvent({ type: "text_delta", delta: `\n\n⚠️ Unknown tool: ${call.name}` });
-          continue;
-        }
-        const result = await registered.executor.execute(call.arguments);
-        if (result.success) {
-          onEvent({ type: "text_delta", delta: `\n\n✅ ${call.name}: ${result.output}` });
-        } else {
-          onEvent({ type: "text_delta", delta: `\n\n❌ ${call.name}: ${result.error}` });
         }
       }
     };
@@ -160,7 +99,7 @@ ${tabContent}`
   }
 }
 
-// --- Side Panel Connection ---
+// --- Side Panel Connection (ORIGINAL, UNCHANGED) ---
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "chromecode-panel") {
     port.onMessage.addListener(async (msg) => {
@@ -174,7 +113,7 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 });
 
-// --- Handle MCP config reload messages from options page ---
+// --- MCP reload from options page ---
 chrome.runtime.onMessage.addListener((msg) => {
   if (msg.type === "MCP_RELOAD") {
     mcpCoordinator.reload().catch(err => console.error("[MCP] Reload failed:", err));

@@ -2,24 +2,20 @@ export async function getActiveTabContent(): Promise<string> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("No active tab found");
 
-  try {
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        return {
-          innerText: document.body.innerText,
-          title: document.title,
-          url: window.location.href,
-          readyState: document.readyState
-        };
-      }
-    });
+  const results = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: () => {
+      return {
+        innerText: document.body.innerText,
+        title: document.title,
+        url: window.location.href,
+        readyState: document.readyState
+      };
+    }
+  });
 
-    const data = results[0].result;
-    return `URL: ${data.url}\nTitle: ${data.title}\nStatus: ${data.readyState}\n\nContent:\n${data.innerText.slice(0, 5000)}`;
-  } catch (err: any) {
-    return `URL: ${tab.url || "unknown"}\nTitle: ${tab.title || "unknown"}\n\nContent: [Could not read page content: ${err.message}]`;
-  }
+  const data = results[0].result;
+  return `URL: ${data.url}\nTitle: ${data.title}\nStatus: ${data.readyState}\n\nContent:\n${data.innerText.slice(0, 5000)}`;
 }
 
 export async function editActiveTab(code: string): Promise<{success: boolean, error?: string}> {
