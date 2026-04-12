@@ -15,15 +15,31 @@ const mcpCoordinator = new McpCoordinator(toolRegistry);
 mcpCoordinator.initialize().catch(err => console.error("[MCP] Init failed:", err));
 
 // --- Bridge Connection ---
-function connectToBridge() {
+let bridgeRetryDelay = 5000;
+const BRIDGE_MAX_DELAY = 60000;
+
+async function probeBridge(): Promise<boolean> {
   try {
-    bridgeSocket = new WebSocket("ws://localhost:3000");
-  } catch {
-    setTimeout(connectToBridge, 5000);
+    const res = await fetch("http://localhost:3001/health", { method: "GET", signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch { return false; }
+}
+
+async function connectToBridge() {
+  const alive = await probeBridge();
+  if (!alive) {
+    setTimeout(connectToBridge, bridgeRetryDelay);
+    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
     return;
   }
 
-  bridgeSocket.onopen = () => console.log("Connected to ChromeCode Bridge");
+  bridgeSocket = new WebSocket("ws://localhost:3000");
+
+  bridgeSocket.onopen = () => {
+    bridgeRetryDelay = 5000;
+    console.log("Connected to ChromeCode Bridge");
+    mcpCoordinator.onBridgeConnected(bridgeSocket!);
+  };
 
   bridgeSocket.onmessage = async (event) => {
     const data = JSON.parse(event.data);
@@ -36,14 +52,13 @@ function connectToBridge() {
       });
       return;
     }
-    // Route MCP messages
     mcpCoordinator.onBridgeMessage(data);
   };
 
   bridgeSocket.onclose = () => {
-    console.log("Bridge disconnected. Retrying in 5s...");
     mcpCoordinator.onBridgeDisconnected();
-    setTimeout(connectToBridge, 5000);
+    setTimeout(connectToBridge, bridgeRetryDelay);
+    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
   };
 }
 
@@ -59,6 +74,12 @@ async function handlePrompt(text: string, onEvent: (event: any) => void) {
 \`\`\`javascript:cc_live_edit
 // code
 \`\`\`
+
+For example, to navigate to a URL:
+\`\`\`javascript:cc_live_edit
+window.location.href = "https://example.com";
+\`\`\`
+
 Context:
 ${tabContent}`
     };
@@ -99,12 +120,16 @@ ${tabContent}`
   }
 }
 
-// --- Side Panel Connection (ORIGINAL, UNCHANGED) ---
+// --- Side Panel Connection ---
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name === "chromecode-panel") {
     port.onMessage.addListener(async (msg) => {
       if (msg.type === "PROMPT") {
-        await handlePrompt(msg.text, (event) => port.postMessage({ type: "AGENT_EVENT", event }));
+        try {
+          await handlePrompt(msg.text, (event) => port.postMessage({ type: "AGENT_EVENT", event }));
+        } catch (err: any) {
+          port.postMessage({ type: "ERROR", message: err.message });
+        }
       } else if (msg.type === "CLEAR_HISTORY") {
         conversationHistory = [];
         port.postMessage({ type: "AGENT_EVENT", event: { type: "text_delta", delta: "\n\n🧹 History cleared." } });
