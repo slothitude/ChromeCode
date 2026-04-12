@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "ChromeCode",
+  "version": "0.1.0",
+  "description": "Browser-based coding agent partner",
+  "permissions": [
+    "sidePanel",
+    "storage",
+    "scripting",
+    "activeTab",
+    "notifications",
+    "userScripts",
+    "debugger"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background/background.js",
+    "type": "module"
+  },
+  "side_panel": {
+    "default_path": "panel/panel.html"
+  },
+  "options_page": "options/options.html",
+  "action": {
+    "default_title": "Open ChromeCode"
+  },
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ChromeCode Options</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; background: #1e1e1e; color: #fff; }
+    .field { margin-bottom: 15px; }
+    label { display: block; margin-bottom: 5px; }
+    input { width: 100%; padding: 8px; background: #3c3c3c; border: 1px solid #555; color: #fff; }
+    button { padding: 10px 20px; background: #0e639c; color: #fff; border: none; cursor: pointer; }
+    #status { margin-top: 10px; color: #4caf50; }
+  </style>
+</head>
+<body>
+  <h1>ChromeCode Settings</h1>
+  <div class="field">
+    <label>NVIDIA API Key</label>
+    <input type="password" id="api-key">
+  </div>
+  <div class="field">
+    <label>Base URL</label>
+    <input type="text" id="base-url" value="https://integrate.api.nvidia.com/v1">
+  </div>
+  <div class="field">
+    <label>Model ID</label>
+    <input type="text" id="model-id" value="minimaxai/minimax-m2.7">
+  </div>
+  <button id="save">Save Settings</button>
+  <div id="status"></div>
+  <script src="options.js"></script>
+</body>
+</html>

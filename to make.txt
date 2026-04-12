@@ -1,0 +1,80 @@
+This plan details the implementation of **ChromeCode**, a browser-based coding agent that integrates the core logic of Mario Zechner’s `pi-mono` into a Chrome extension. This allows the agent to exist alongside your workflow in a side panel, giving it direct access to web-based IDEs and documentation.
+
+---
+
+## Phase 1: The Core Architecture
+To move from a CLI to Chrome, we must separate the **Agent Runtime** from the **Terminal Environment**.
+
+### 1. The Background Engine (Service Worker)
+We utilize `@pi-agent-core` to manage the "agent loop" (LLM call → Tool execution).
+* **Provider Management:** Use `@pi-ai` for multi-provider support (Anthropic, OpenAI, Gemini).
+* **State Persistence:** Replace local file-based JSONL with `chrome.storage.local` and `IndexedDB`.
+* **Authentication:** Implement an options page to securely store and encrypt API keys.
+
+### 2. The User Interface (Side Panel)
+Leverage `@pi-web-ui` components for the chat interface.
+* **Layout:** A persistent side panel (`chrome.sidePanel`) containing a conversation stream, token usage trackers, and a file-tree preview.
+* **Artifacts:** A sliding panel to view code changes, diffs, and rendered previews of web components.
+
+---
+
+## Phase 2: Browser-Native Tooling
+Since the agent cannot run a local shell, we rewrite the `pi-mono` tools for the browser environment.
+
+| Tool | Browser Implementation |
+| :--- | :--- |
+| **`read` / `write`** | Uses the **File System Access API** to request permission to a local folder or interacts with GitHub's API for remote repos. |
+| **`bash`** | Dispatched to a **remote vLLM pod** via `pi-pods` or a local WebContainer instance. |
+| **`browser_exec`** | **New:** Allows the agent to run JavaScript in the current tab to scrape data or manipulate the UI. |
+| **`lsp_proxy`** | Connects to a language server via WebSockets to provide linting and go-to-definition within the extension. |
+
+---
+
+## Phase 3: Implementation Roadmap
+
+### Step 1: Initialize the Extension Workspace
+Set up a TypeScript-based extension manifest (v3) and link the `pi-mono` packages.
+```json
+{
+  "manifest_version": 3,
+  "name": "ChromeCode",
+  "permissions": ["sidePanel", "storage", "scripting", "activeTab"],
+  "background": { "service_worker": "dist/background.js" },
+  "side_panel": { "default_path": "panel.html" }
+}
+```
+
+### Step 2: Port the Agent Loop
+Implement the message-passing bridge between the UI and the Background Engine.
+```typescript
+// background.ts
+import { AgentSession } from "@mariozechner/pi-coding-agent";
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "PROMPT") {
+    const session = getSession(message.sessionId);
+    session.prompt(message.text).subscribe(event => {
+       chrome.runtime.sendMessage({ type: "AGENT_EVENT", event });
+    });
+  }
+});
+```
+
+### Step 3: Inject Content Scripts for "Live-Coding"
+Create a tool that identifies if the user is on a coding site (GitHub, Replit) and allows the agent to "press keys" or edit the text area directly.
+
+---
+
+## Phase 4: Verification & Security
+* **Permission Gates:** Every "Write" or "Bash" command triggers a UI confirmation in the side panel.
+* **Sandboxing:** All LLM-generated code execution is confined to a worker or a locked-down iframe to prevent cross-site scripting (XSS).
+
+
+This architecture transforms `pi-mono` from a local tool into a ubiquitous coding partner that understands your web context.
+
+[How Pi Mono Actually Works: The Shared Agent Stack Behind Pi](https://www.youtube.com/watch?v=YOuKskmEosQ)
+
+This video provides a deep dive into the layered architecture of the `pi-mono` toolkit, which is essential for understanding how to properly decouple the agent core for this browser implementation.
+
+
+http://googleusercontent.com/youtube_content/0

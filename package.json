@@ -1,0 +1,30 @@
+{
+  "name": "chromecode",
+  "version": "0.1.0",
+  "description": "Chrome Side Panel coding agent based on pi-mono",
+  "main": "dist/background.js",
+  "scripts": {
+    "build": "node build.js",
+    "watch": "node build.js --watch"
+  },
+  "keywords": [
+    "chrome-extension",
+    "ai",
+    "agent",
+    "coding"
+  ],
+  "author": "Slothitude",
+  "license": "MIT",
+  "dependencies": {
+    "@mariozechner/pi-coding-agent": "^0.55.3",
+    "@mariozechner/pi-agent-core": "^0.55.3",
+    "@mariozechner/pi-ai": "^0.55.3",
+    "idb": "^8.0.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.260",
+    "typescript": "^5.0.0",
+    "esbuild": "^0.20.0"
+  }
+}
