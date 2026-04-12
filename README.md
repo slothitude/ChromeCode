@@ -131,6 +131,17 @@ Spawn local MCP processes through the bridge server:
 }
 ```
 
+## Roadmap
+
+Right now ChromeCode edits JS in the active tab. The same architecture enables:
+
+- **Web scraping agent** — reads any page structure, extracts data, no brittle selectors
+- **Form automation** — fills and submits anything, sees the result, retries
+- **Visual regression** — screenshot before/after every edit
+- **Network mocking** — intercept API calls, swap responses, test edge cases live
+- **Multi-tab orchestration** — bridge server coordinates agents across tabs
+- **JINN integration** — ChromeCode becomes a browser tool-use endpoint for your multi-agent system
+
 ## License
 
 MIT

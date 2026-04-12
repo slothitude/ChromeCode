@@ -3,6 +3,7 @@ import { getActiveTabContent } from "./tab-tools.js";
 import { ToolRegistry } from "./tools/tool-registry.js";
 import { parseToolCalls } from "./tools/tool-parser.js";
 import { registerBuiltinTools } from "./tools/builtin-tools.js";
+import { McpCoordinator } from "./mcp/mcp-coordinator.js";
 
 let conversationHistory: Message[] = [];
 let bridgeSocket: WebSocket | null = null;
@@ -11,16 +12,17 @@ let bridgeSocket: WebSocket | null = null;
 const toolRegistry = new ToolRegistry();
 registerBuiltinTools(toolRegistry);
 
+// --- MCP Coordinator ---
+const mcpCoordinator = new McpCoordinator(toolRegistry);
+mcpCoordinator.initialize().catch(err => console.error("[MCP] Init failed:", err));
+
 // --- Bridge Connection ---
 function connectToBridge() {
   bridgeSocket = new WebSocket("ws://localhost:3000");
 
   bridgeSocket.onopen = () => {
     console.log("Connected to ChromeCode Bridge");
-    // Notify coordinator that bridge is connected (will be wired in phase 3)
-    if (typeof window !== "undefined" && (window as any).__mcpCoordinator) {
-      (window as any).__mcpCoordinator.onBridgeConnected(bridgeSocket!);
-    }
+    mcpCoordinator.onBridgeConnected(bridgeSocket!);
   };
 
   bridgeSocket.onmessage = async (event) => {
@@ -32,18 +34,15 @@ function connectToBridge() {
           bridgeSocket.send(JSON.stringify({ type: "AGENT_EVENT", event: agentEvent }));
         }
       });
+      return;
     }
-    // MCP messages will be handled by bridge-mcp-client (phase 3)
-    if (typeof window !== "undefined" && (window as any).__mcpCoordinator) {
-      (window as any).__mcpCoordinator.onBridgeMessage(data);
-    }
+    // Route MCP messages to coordinator
+    mcpCoordinator.onBridgeMessage(data);
   };
 
   bridgeSocket.onclose = () => {
     console.log("Bridge disconnected. Retrying in 5s...");
-    if (typeof window !== "undefined" && (window as any).__mcpCoordinator) {
-      (window as any).__mcpCoordinator.onBridgeDisconnected();
-    }
+    mcpCoordinator.onBridgeDisconnected();
     setTimeout(connectToBridge, 5000);
   };
 }
@@ -95,10 +94,9 @@ ${tabContent}`,
         } else {
           const errText = result.error || "Unknown error";
           if (call.name === "cc_live_edit") {
-            // Auto-retry for live edit failures (backward compat behavior)
             onEvent({ type: "text_delta", delta: `\n\n❌ ${call.name} Error: ${errText}\nFixing...` });
             await runLoop(`The ${call.name} failed: ${errText}. Fix it.`);
-            return; // runLoop was called recursively, stop processing further calls
+            return;
           }
           onEvent({ type: "text_delta", delta: `\n\n❌ ${call.name} Error: ${errText}` });
         }
@@ -130,7 +128,14 @@ chrome.runtime.onConnect.addListener((port) => {
   }
 });
 
+// --- Handle MCP config reload messages from options page ---
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === "MCP_RELOAD") {
+    mcpCoordinator.reload().catch(err => console.error("[MCP] Reload failed:", err));
+  }
+});
+
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
-// Export registry for MCP coordinator access (phase 3/4)
-export { toolRegistry, bridgeSocket };
+// Export for testing/debugging
+export { toolRegistry, mcpCoordinator };

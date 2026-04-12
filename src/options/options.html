@@ -4,16 +4,32 @@
   <meta charset="UTF-8">
   <title>ChromeCode Options</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; background: #1e1e1e; color: #fff; }
+    body { font-family: sans-serif; padding: 20px; background: #1e1e1e; color: #fff; max-width: 700px; margin: 0 auto; }
+    h1, h2 { border-bottom: 1px solid #333; padding-bottom: 8px; }
+    h2 { margin-top: 30px; color: #4fc3f7; }
     .field { margin-bottom: 15px; }
-    label { display: block; margin-bottom: 5px; }
-    input { width: 100%; padding: 8px; background: #3c3c3c; border: 1px solid #555; color: #fff; }
+    label { display: block; margin-bottom: 5px; font-size: 14px; }
+    input, select { width: 100%; padding: 8px; background: #3c3c3c; border: 1px solid #555; color: #fff; box-sizing: border-box; }
     button { padding: 10px 20px; background: #0e639c; color: #fff; border: none; cursor: pointer; }
+    button:hover { background: #1177bb; }
+    button.danger { background: #c62828; }
+    button.danger:hover { background: #e53935; }
+    button.small { padding: 5px 12px; font-size: 12px; }
     #status { margin-top: 10px; color: #4caf50; }
+    .server-entry { background: #2a2a2a; border: 1px solid #444; padding: 12px; margin-bottom: 10px; border-radius: 4px; }
+    .server-entry .field { margin-bottom: 8px; }
+    .server-entry label { font-size: 12px; color: #aaa; }
+    .server-entry input { font-size: 13px; padding: 6px; }
+    .row { display: flex; gap: 10px; }
+    .row .field { flex: 1; }
+    .actions { display: flex; gap: 10px; margin-top: 15px; }
+    #add-remote-btn, #add-bridge-btn { background: #2e7d32; margin-top: 5px; }
+    #add-remote-btn:hover, #add-bridge-btn:hover { background: #388e3c; }
   </style>
 </head>
 <body>
   <h1>ChromeCode Settings</h1>
+
   <div class="field">
     <label>NVIDIA API Key</label>
     <input type="password" id="api-key">
@@ -26,8 +42,22 @@
     <label>Model ID</label>
     <input type="text" id="model-id" value="minimaxai/minimax-m2.7">
   </div>
-  <button id="save">Save Settings</button>
+
+  <h2>Remote MCP Servers</h2>
+  <p style="color: #888; font-size: 13px;">Connect directly to MCP servers over HTTP/SSE from the extension service worker.</p>
+  <div id="remote-servers"></div>
+  <button id="add-remote-btn" class="small">+ Add Remote Server</button>
+
+  <h2>Bridge-Managed MCP Servers</h2>
+  <p style="color: #888; font-size: 13px;">Local MCP servers spawned by the bridge server via stdio (requires running bridge).</p>
+  <div id="bridge-servers"></div>
+  <button id="add-bridge-btn" class="small">+ Add Bridge Server</button>
+
+  <div class="actions">
+    <button id="save">Save Settings</button>
+  </div>
   <div id="status"></div>
+
   <script src="options.js"></script>
 </body>
 </html>
