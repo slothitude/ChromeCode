@@ -21,14 +21,25 @@ let bridgeRetryDelay = 5000;
 const BRIDGE_MIN_DELAY = 5000;
 const BRIDGE_MAX_DELAY = 60000;
 
-function connectToBridge() {
+async function probeBridge(): Promise<boolean> {
   try {
-    bridgeSocket = new WebSocket("ws://localhost:3000");
+    const res = await fetch("http://localhost:3001/health", { method: "GET", signal: AbortSignal.timeout(2000) });
+    return res.ok;
   } catch {
-    // WebSocket constructor may throw in some environments
+    return false;
+  }
+}
+
+async function connectToBridge() {
+  // Probe HTTP health endpoint first — avoids browser-level WebSocket error logging
+  const alive = await probeBridge();
+  if (!alive) {
     setTimeout(connectToBridge, bridgeRetryDelay);
+    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
     return;
   }
+
+  bridgeSocket = new WebSocket("ws://localhost:3000");
 
   bridgeSocket.onopen = () => {
     bridgeRetryDelay = BRIDGE_MIN_DELAY;
@@ -49,10 +60,6 @@ function connectToBridge() {
     }
     // Route MCP messages to coordinator
     mcpCoordinator.onBridgeMessage(data);
-  };
-
-  bridgeSocket.onerror = () => {
-    // Suppress — onclose will handle retry
   };
 
   bridgeSocket.onclose = () => {

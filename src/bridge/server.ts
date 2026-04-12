@@ -106,7 +106,10 @@ console.log(`[Bridge] WebSocket server listening on ws://localhost:${WS_PORT}`);
 
 // --- 2. HTTP API (for other agents) ---
 const server = http.createServer((req, res) => {
-  if (req.method === 'POST' && req.url === '/prompt') {
+  if (req.method === 'GET' && req.url === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok' }));
+  } else if (req.method === 'POST' && req.url === '/prompt') {
     let body = '';
     req.on('data', chunk => body += chunk);
     req.on('end', () => {
