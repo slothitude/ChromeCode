@@ -1,5 +1,5 @@
 import { streamCompletion, type Message } from "./providers.js";
-import { getActiveTabContent } from "./tab-tools.js";
+import { getActiveTabContent, editActiveTab } from "./tab-tools.js";
 import { ToolRegistry } from "./tools/tool-registry.js";
 import { parseToolCalls } from "./tools/tool-parser.js";
 import { registerBuiltinTools } from "./tools/builtin-tools.js";
@@ -8,7 +8,7 @@ import { McpCoordinator } from "./mcp/mcp-coordinator.js";
 let conversationHistory: Message[] = [];
 let bridgeSocket: WebSocket | null = null;
 
-// --- Tool Registry ---
+// --- Tool Registry (for MCP tools) ---
 const toolRegistry = new ToolRegistry();
 registerBuiltinTools(toolRegistry);
 
@@ -16,7 +16,7 @@ registerBuiltinTools(toolRegistry);
 const mcpCoordinator = new McpCoordinator(toolRegistry);
 mcpCoordinator.initialize().catch(err => console.error("[MCP] Init failed:", err));
 
-// --- Bridge Connection (optional, silent when bridge isn't running) ---
+// --- Bridge Connection ---
 let bridgeRetryDelay = 5000;
 const BRIDGE_MIN_DELAY = 5000;
 const BRIDGE_MAX_DELAY = 60000;
@@ -31,7 +31,6 @@ async function probeBridge(): Promise<boolean> {
 }
 
 async function connectToBridge() {
-  // Probe HTTP health endpoint first — avoids browser-level WebSocket error logging
   const alive = await probeBridge();
   if (!alive) {
     setTimeout(connectToBridge, bridgeRetryDelay);
@@ -58,7 +57,6 @@ async function connectToBridge() {
       });
       return;
     }
-    // Route MCP messages to coordinator
     mcpCoordinator.onBridgeMessage(data);
   };
 
@@ -71,21 +69,18 @@ async function connectToBridge() {
 
 connectToBridge();
 
-// --- Core Prompt Logic ---
+// --- Core Prompt Logic (preserved from original) ---
 async function handlePrompt(text: string, onEvent: (event: any) => void) {
   try {
     const tabContent = await getActiveTabContent();
-    const toolPrompt = toolRegistry.formatToolsForPrompt();
-
     const systemPrompt: Message = {
       role: "system",
       content: `You are ChromeCode. You can see the active tab and perform Live Edits using:
 \`\`\`javascript:cc_live_edit
 // code
 \`\`\`
-${toolPrompt}
 Context:
-${tabContent}`,
+${tabContent}`
     };
 
     const runLoop = async (input: string) => {
@@ -100,28 +95,33 @@ ${tabContent}`,
 
       conversationHistory.push({ role: "assistant", content: fullResponse });
 
-      // Parse and execute tool calls
-      const toolCalls = parseToolCalls(fullResponse);
+      // --- Original cc_live_edit handling (unchanged) ---
+      const editMatch = fullResponse.match(/```javascript:cc_live_edit\s*([\s\S]*?)```/i);
+      if (editMatch && editMatch[1]) {
+        const result = await editActiveTab(editMatch[1].trim());
+        if (result.success) {
+          const successMsg = "\n\n✅ Success: Tab updated.";
+          onEvent({ type: "text_delta", delta: successMsg });
+        } else {
+          onEvent({ type: "text_delta", delta: `\n\n❌ Error: ${result.error}\nFixing...` });
+          await runLoop(`The edit failed: ${result.error}. Fix it.`);
+          return;
+        }
+      }
+
+      // --- MCP tool handling (new, only fires for ```tool:xxx``` blocks) ---
+      const toolCalls = parseToolCalls(fullResponse).filter(c => c.name !== "cc_live_edit");
       for (const call of toolCalls) {
         const registered = toolRegistry.get(call.name);
         if (!registered) {
-          const errMsg = `\n\n⚠️ Unknown tool: ${call.name}`;
-          onEvent({ type: "text_delta", delta: errMsg });
+          onEvent({ type: "text_delta", delta: `\n\n⚠️ Unknown tool: ${call.name}` });
           continue;
         }
-
         const result = await registered.executor.execute(call.arguments);
         if (result.success) {
-          const successMsg = `\n\n✅ ${call.name}: ${result.output}`;
-          onEvent({ type: "text_delta", delta: successMsg });
+          onEvent({ type: "text_delta", delta: `\n\n✅ ${call.name}: ${result.output}` });
         } else {
-          const errText = result.error || "Unknown error";
-          if (call.name === "cc_live_edit") {
-            onEvent({ type: "text_delta", delta: `\n\n❌ ${call.name} Error: ${errText}\nFixing...` });
-            await runLoop(`The ${call.name} failed: ${errText}. Fix it.`);
-            return;
-          }
-          onEvent({ type: "text_delta", delta: `\n\n❌ ${call.name} Error: ${errText}` });
+          onEvent({ type: "text_delta", delta: `\n\n❌ ${call.name}: ${result.error}` });
         }
       }
     };
@@ -159,6 +159,3 @@ chrome.runtime.onMessage.addListener((msg) => {
 });
 
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-
-// Export for testing/debugging
-export { toolRegistry, mcpCoordinator };
