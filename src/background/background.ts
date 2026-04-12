@@ -79,7 +79,14 @@ async function handlePrompt(text: string, onEvent: (event: any) => void) {
 
     const systemPrompt: Message = {
       role: "system",
-      content: `You are ChromeCode. You can see the active tab and use tools to interact with it.
+      content: `You are ChromeCode. You can see the active tab and interact with it by writing JavaScript code.
+
+To edit the page or execute code in the active tab, use EXACTLY this format:
+\`\`\`javascript:cc_live_edit
+// your JavaScript code here
+\`\`\`
+
+IMPORTANT: Always use the fenced code block format above. Do NOT use any other format like [TOOL_CALL] or tool:function_name.
 
 ${toolPrompt}
 
