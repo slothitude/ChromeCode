@@ -60,33 +60,30 @@ export class ToolRegistry {
 
   formatToolsForPrompt(): string {
     const tools = this.getAll();
-    if (tools.length === 0) return "No tools available.";
+    // Only show extra tools section if MCP tools are registered (beyond builtins)
+    const mcpTools = tools.filter(t => t.source !== "builtin");
+    if (mcpTools.length === 0) return "";
 
-    let prompt = "You have access to the following tools:\n\n";
+    let prompt = "\nYou also have access to these additional tools:\n";
 
-    for (const tool of tools) {
-      if (tool.name === "cc_live_edit") {
-        prompt += `### cc_live_edit (Live Edit)\n${tool.description}\nUsage:\n\`\`\`javascript:cc_live_edit\n// JavaScript code to execute in the active tab\n\`\`\`\n\n`;
-      } else {
-        prompt += `### ${tool.name}\n${tool.description}\n`;
-        if (tool.inputSchema?.properties) {
-          const props = tool.inputSchema.properties;
-          const example: Record<string, any> = {};
-          for (const [key, schema] of Object.entries(props)) {
-            if ((schema as any).example !== undefined) {
-              example[key] = (schema as any).example;
-            } else if ((schema as any).type === "string") {
-              example[key] = "";
-            } else if ((schema as any).type === "number") {
-              example[key] = 0;
-            } else if ((schema as any).type === "boolean") {
-              example[key] = false;
-            }
+    for (const tool of mcpTools) {
+      prompt += `\n### ${tool.name}\n${tool.description}\n`;
+      if (tool.inputSchema?.properties) {
+        const example: Record<string, any> = {};
+        for (const [key, schema] of Object.entries(tool.inputSchema.properties)) {
+          if ((schema as any).example !== undefined) {
+            example[key] = (schema as any).example;
+          } else if ((schema as any).type === "string") {
+            example[key] = "";
+          } else if ((schema as any).type === "number") {
+            example[key] = 0;
+          } else if ((schema as any).type === "boolean") {
+            example[key] = false;
           }
-          prompt += `Usage:\n\`\`\`tool:${tool.name}\n${JSON.stringify(example)}\n\`\`\`\n\n`;
-        } else {
-          prompt += `Usage:\n\`\`\`tool:${tool.name}\n{}\n\`\`\`\n\n`;
         }
+        prompt += `Usage:\n\`\`\`tool:${tool.name}\n${JSON.stringify(example)}\n\`\`\`\n`;
+      } else {
+        prompt += `Usage:\n\`\`\`tool:${tool.name}\n{}\n\`\`\`\n`;
       }
     }
 
