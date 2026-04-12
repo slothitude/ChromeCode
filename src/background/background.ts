@@ -16,11 +16,22 @@ registerBuiltinTools(toolRegistry);
 const mcpCoordinator = new McpCoordinator(toolRegistry);
 mcpCoordinator.initialize().catch(err => console.error("[MCP] Init failed:", err));
 
-// --- Bridge Connection ---
+// --- Bridge Connection (optional, silent when bridge isn't running) ---
+let bridgeRetryDelay = 5000;
+const BRIDGE_MIN_DELAY = 5000;
+const BRIDGE_MAX_DELAY = 60000;
+
 function connectToBridge() {
-  bridgeSocket = new WebSocket("ws://localhost:3000");
+  try {
+    bridgeSocket = new WebSocket("ws://localhost:3000");
+  } catch {
+    // WebSocket constructor may throw in some environments
+    setTimeout(connectToBridge, bridgeRetryDelay);
+    return;
+  }
 
   bridgeSocket.onopen = () => {
+    bridgeRetryDelay = BRIDGE_MIN_DELAY;
     console.log("Connected to ChromeCode Bridge");
     mcpCoordinator.onBridgeConnected(bridgeSocket!);
   };
@@ -40,10 +51,14 @@ function connectToBridge() {
     mcpCoordinator.onBridgeMessage(data);
   };
 
+  bridgeSocket.onerror = () => {
+    // Suppress — onclose will handle retry
+  };
+
   bridgeSocket.onclose = () => {
-    console.log("Bridge disconnected. Retrying in 5s...");
     mcpCoordinator.onBridgeDisconnected();
-    setTimeout(connectToBridge, 5000);
+    setTimeout(connectToBridge, bridgeRetryDelay);
+    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
   };
 }
 
