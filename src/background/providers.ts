@@ -3,21 +3,19 @@ export interface Message {
   content: string;
 }
 
-export async function streamCompletion(messages: Message[], onChunk: (text: string) => void) {
-  const settings = await chrome.storage.local.get(["apiKey", "baseUrl", "modelId"]);
-  
-  const apiKey = settings.apiKey || "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";
-  const baseUrl = settings.baseUrl || "https://integrate.api.nvidia.com/v1";
-  const modelId = settings.modelId || "minimaxai/minimax-m2.7";
+import { getActiveProvider } from "../shared/provider-storage.js";
 
-  const response = await fetch(`${baseUrl}/chat/completions`, {
+export async function streamCompletion(messages: Message[], onChunk: (text: string) => void) {
+  const provider = await getActiveProvider();
+
+  const response = await fetch(`${provider.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Authorization": `Bearer ${apiKey}`
+      "Authorization": `Bearer ${provider.apiKey}`
     },
     body: JSON.stringify({
-      model: modelId,
+      model: provider.modelId,
       messages: messages,
       temperature: 1,
       top_p: 0.95,

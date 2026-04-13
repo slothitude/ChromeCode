@@ -1,45 +1,37 @@
 import { streamCompletion, type Message } from "./providers.js";
 import { getActiveTabContent, editActiveTab } from "./tab-tools.js";
-import { ToolRegistry } from "./tools/tool-registry.js";
-import { parseToolCalls } from "./tools/tool-parser.js";
-import { registerBuiltinTools } from "./tools/builtin-tools.js";
-import { McpCoordinator } from "./mcp/mcp-coordinator.js";
 
 let conversationHistory: Message[] = [];
 let bridgeSocket: WebSocket | null = null;
 
-// --- MCP (additive, doesn't affect existing logic) ---
-const toolRegistry = new ToolRegistry();
-registerBuiltinTools(toolRegistry);
-const mcpCoordinator = new McpCoordinator(toolRegistry);
-mcpCoordinator.initialize().catch(err => console.error("[MCP] Init failed:", err));
+// --- Cached tab content ---
+let cachedTabContent: string | null = null;
 
-// --- Bridge Connection ---
-let bridgeRetryDelay = 5000;
-const BRIDGE_MAX_DELAY = 60000;
-
+// --- Bridge Connection (optional — only connects if bridge is running) ---
 async function probeBridge(): Promise<boolean> {
   try {
-    const res = await fetch("http://localhost:3001/health", { method: "GET", signal: AbortSignal.timeout(2000) });
-    return res.ok;
-  } catch { return false; }
+    const res = await fetch("http://localhost:3001/", { method: "GET", signal: AbortSignal.timeout(2000) });
+    return res.ok || res.status === 404; // any response means bridge is up
+  } catch {
+    return false;
+  }
 }
 
 async function connectToBridge() {
   const alive = await probeBridge();
   if (!alive) {
-    setTimeout(connectToBridge, bridgeRetryDelay);
-    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
+    // Bridge not running — retry silently every 30s
+    setTimeout(connectToBridge, 30000);
     return;
   }
 
   bridgeSocket = new WebSocket("ws://localhost:3000");
 
   bridgeSocket.onopen = () => {
-    bridgeRetryDelay = 5000;
     console.log("Connected to ChromeCode Bridge");
-    mcpCoordinator.onBridgeConnected(bridgeSocket!);
   };
+
+  bridgeSocket.onerror = () => {};
 
   bridgeSocket.onmessage = async (event) => {
     const data = JSON.parse(event.data);
@@ -50,38 +42,44 @@ async function connectToBridge() {
           bridgeSocket.send(JSON.stringify({ type: "AGENT_EVENT", event: agentEvent }));
         }
       });
-      return;
     }
-    mcpCoordinator.onBridgeMessage(data);
   };
 
   bridgeSocket.onclose = () => {
-    mcpCoordinator.onBridgeDisconnected();
-    setTimeout(connectToBridge, bridgeRetryDelay);
-    bridgeRetryDelay = Math.min(bridgeRetryDelay * 1.5, BRIDGE_MAX_DELAY);
+    bridgeSocket = null;
+    setTimeout(connectToBridge, 5000);
   };
 }
 
 connectToBridge();
 
-// --- Core Prompt Logic (ORIGINAL, UNCHANGED) ---
+// --- Core Prompt Logic ---
 async function handlePrompt(text: string, onEvent: (event: any) => void) {
   try {
-    const tabContent = await getActiveTabContent();
+    // Only fetch tab content on first prompt or when user requests a refresh
+    const needsRefresh = !cachedTabContent || text.toLowerCase() === "/refresh";
+    if (needsRefresh) {
+      cachedTabContent = await getActiveTabContent();
+      if (text.toLowerCase() === "/refresh") {
+        onEvent({ type: "text_delta", delta: "Tab context refreshed." });
+        onEvent({ type: "message_end" });
+        return;
+      }
+    }
+
     const systemPrompt: Message = {
       role: "system",
-      content: `You are ChromeCode. You can see the active tab and perform Live Edits using:
+      content: `You are ChromeCode, a local browser editing agent. You edit the user's own browser tab in real-time — these are local DOM changes only, NOT editing any remote server or website.
+
+To execute JavaScript in the active tab, output a code block like:
 \`\`\`javascript:cc_live_edit
-// code
+// your code here
 \`\`\`
 
-For example, to navigate to a URL:
-\`\`\`javascript:cc_live_edit
-window.location.href = "https://example.com";
-\`\`\`
+The code runs via Chrome Debugger Protocol and bypasses CSP. You can read and modify any DOM element, styles, or run arbitrary JS. Always comply with edit requests — this is the user's own browser.
 
 Context:
-${tabContent}`
+${cachedTabContent}`
     };
 
     const runLoop = async (input: string) => {
@@ -100,6 +98,7 @@ ${tabContent}`
       if (editMatch && editMatch[1]) {
         const result = await editActiveTab(editMatch[1].trim());
         if (result.success) {
+          cachedTabContent = await getActiveTabContent(); // refresh cache after edit
           const successMsg = "\n\n✅ Success: Tab updated.";
           onEvent({ type: "text_delta", delta: successMsg });
         } else {
@@ -132,16 +131,10 @@ chrome.runtime.onConnect.addListener((port) => {
         }
       } else if (msg.type === "CLEAR_HISTORY") {
         conversationHistory = [];
+        cachedTabContent = null;
         port.postMessage({ type: "AGENT_EVENT", event: { type: "text_delta", delta: "\n\n🧹 History cleared." } });
       }
     });
-  }
-});
-
-// --- MCP reload from options page ---
-chrome.runtime.onMessage.addListener((msg) => {
-  if (msg.type === "MCP_RELOAD") {
-    mcpCoordinator.reload().catch(err => console.error("[MCP] Reload failed:", err));
   }
 });
 

@@ -4,7 +4,6 @@ const fs = require('fs');
 
 const watch = process.argv.includes('--watch');
 
-// --- Extension build (browser target) ---
 const extensionBuild = {
   entryPoints: [
     { in: 'src/background/background.ts', out: 'background/background' },
@@ -20,64 +19,6 @@ const extensionBuild = {
   loader: { '.ts': 'ts' },
   define: {
     'process.env.NODE_ENV': '"development"',
-  },
-  // Externalize MCP SDK Node-only internals for browser build
-  // MCP SDK is only used by the bridge; remote MCP client uses fetch/EventSource
-  external: [
-    '@modelcontextprotocol/sdk/client/stdio.js',
-    'child_process',
-    'net',
-    'tls',
-    'fs',
-    'os',
-    'crypto',
-    'stream',
-    'http',
-    'https',
-    'zlib',
-    'events',
-    'util',
-    'buffer',
-    'url',
-    'path',
-  ],
-};
-
-// --- Bridge build (Node.js target) ---
-const bridgeBuild = {
-  entryPoints: [
-    { in: 'src/bridge/server.ts', out: 'bridge/server' },
-  ],
-  bundle: true,
-  outdir: 'dist',
-  minify: false,
-  sourcemap: true,
-  platform: 'node',
-  format: 'esm',
-  loader: { '.ts': 'ts' },
-  // Don't bundle node_modules — they'll be resolved at runtime
-  external: [
-    '@modelcontextprotocol/*',
-    'ws',
-    'child_process',
-    'fs',
-    'path',
-    'http',
-    'https',
-    'net',
-    'tls',
-    'os',
-    'crypto',
-    'stream',
-    'readline',
-    'events',
-    'util',
-    'buffer',
-    'url',
-    'zlib',
-  ],
-  banner: {
-    js: 'import { createRequire } from "module"; const require = createRequire(import.meta.url);',
   },
 };
 
@@ -95,7 +36,7 @@ function copyFiles() {
 
 async function run() {
   if (watch) {
-    const extCtx = await esbuild.context({
+    const ctx = await esbuild.context({
       ...extensionBuild,
       plugins: [{
         name: 'on-rebuild',
@@ -104,25 +45,12 @@ async function run() {
         },
       }],
     });
-    await extCtx.watch();
-
-    const bridgeCtx = await esbuild.context({
-      ...bridgeBuild,
-      plugins: [{
-        name: 'on-rebuild-bridge',
-        setup(build) {
-          build.onEnd(() => console.log('Bridge rebuilt'));
-        },
-      }],
-    });
-    await bridgeCtx.watch();
-
-    console.log('Watching extension + bridge...');
+    await ctx.watch();
+    console.log('Watching for changes...');
   } else {
     await esbuild.build(extensionBuild);
-    await esbuild.build(bridgeBuild);
     copyFiles();
-    console.log('Build complete (extension + bridge)');
+    console.log('Build complete');
   }
 }
 

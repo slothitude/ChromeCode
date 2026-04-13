@@ -1,124 +1,131 @@
-const apiKeyInput = document.getElementById('api-key') as HTMLInputElement;
-const baseUrlInput = document.getElementById('base-url') as HTMLInputElement;
-const modelIdInput = document.getElementById('model-id') as HTMLInputElement;
-const saveBtn = document.getElementById('save')!;
-const statusDiv = document.getElementById('status')!;
-const remoteServersDiv = document.getElementById('remote-servers')!;
-const bridgeServersDiv = document.getElementById('bridge-servers')!;
-const addRemoteBtn = document.getElementById('add-remote-btn')!;
-const addBridgeBtn = document.getElementById('add-bridge-btn')!;
+import {
+  migrateProviders, getAllProviders, saveProviders,
+  setActiveProvider, deleteProvider, createProvider,
+  ProviderConfig,
+} from "../shared/provider-storage.js";
 
-// --- Load current settings ---
-chrome.storage.local.get(['apiKey', 'baseUrl', 'modelId', 'mcp_servers'], (settings) => {
-  if (settings.apiKey) apiKeyInput.value = settings.apiKey;
-  if (settings.baseUrl) baseUrlInput.value = settings.baseUrl;
-  if (settings.modelId) modelIdInput.value = settings.modelId;
+const listEl = document.getElementById("provider-list")!;
+const addBtn = document.getElementById("add-btn")!;
+const editPanel = document.getElementById("edit-panel")!;
+const editName = document.getElementById("edit-name") as HTMLInputElement;
+const editApikey = document.getElementById("edit-apikey") as HTMLInputElement;
+const editBaseurl = document.getElementById("edit-baseurl") as HTMLInputElement;
+const editModelid = document.getElementById("edit-modelid") as HTMLInputElement;
+const editSave = document.getElementById("edit-save")!;
+const editCancel = document.getElementById("edit-cancel")!;
+const statusDiv = document.getElementById("status")!;
 
-  const mcp = settings.mcp_servers || { remote: [], bridge: [] };
-  for (const config of mcp.remote) {
-    addRemoteServerEntry(config);
-  }
-  for (const config of mcp.bridge) {
-    addBridgeServerEntry(config);
-  }
-});
+let editingId: string | null = null; // null = adding new
 
-// --- Remote MCP server entries ---
-addRemoteBtn.addEventListener('click', () => {
-  addRemoteServerEntry({ name: '', url: '', transport: 'sse' });
-});
-
-function addRemoteServerEntry(config: { name: string; url: string; transport: string }) {
-  const entry = document.createElement('div');
-  entry.className = 'server-entry';
-  entry.innerHTML = `
-    <div class="row">
-      <div class="field">
-        <label>Name</label>
-        <input type="text" class="rs-name" value="${config.name}" placeholder="my-server">
-      </div>
-      <div class="field">
-        <label>Transport</label>
-        <select class="rs-transport">
-          <option value="sse" ${config.transport === 'sse' ? 'selected' : ''}>SSE</option>
-          <option value="http" ${config.transport === 'http' ? 'selected' : ''}>HTTP</option>
-        </select>
-      </div>
-    </div>
-    <div class="field">
-      <label>URL</label>
-      <input type="text" class="rs-url" value="${config.url}" placeholder="https://my-mcp-server.example.com/sse">
-    </div>
-    <button class="small danger remove-btn">Remove</button>
-  `;
-  entry.querySelector('.remove-btn')!.addEventListener('click', () => entry.remove());
-  remoteServersDiv.appendChild(entry);
+function showStatus(msg: string) {
+  statusDiv.textContent = msg;
+  setTimeout(() => { statusDiv.textContent = ""; }, 2000);
 }
 
-// --- Bridge MCP server entries ---
-addBridgeBtn.addEventListener('click', () => {
-  addBridgeServerEntry({ name: '', command: '', args: [] });
-});
+function renderProviderList(providers: ProviderConfig[], activeId: string) {
+  listEl.innerHTML = "";
+  for (const p of providers) {
+    const row = document.createElement("div");
+    row.className = "provider-row" + (p.id === activeId ? " active" : "");
 
-function addBridgeServerEntry(config: { name: string; command: string; args: string[] }) {
-  const entry = document.createElement('div');
-  entry.className = 'server-entry';
-  entry.innerHTML = `
-    <div class="row">
-      <div class="field">
-        <label>Name</label>
-        <input type="text" class="bs-name" value="${config.name}" placeholder="playwright">
-      </div>
-      <div class="field">
-        <label>Command</label>
-        <input type="text" class="bs-command" value="${config.command}" placeholder="npx">
-      </div>
-    </div>
-    <div class="field">
-      <label>Args (comma-separated)</label>
-      <input type="text" class="bs-args" value="${config.args.join(', ')}" placeholder="@playwright/mcp@latest">
-    </div>
-    <button class="small danger remove-btn">Remove</button>
-  `;
-  entry.querySelector('.remove-btn')!.addEventListener('click', () => entry.remove());
-  bridgeServersDiv.appendChild(entry);
+    const radio = document.createElement("input");
+    radio.type = "radio";
+    radio.name = "active-provider";
+    radio.checked = p.id === activeId;
+    radio.addEventListener("change", () => handleSetActive(p.id));
+
+    const nameSpan = document.createElement("span");
+    nameSpan.className = "provider-name";
+    nameSpan.textContent = p.name;
+
+    const modelSpan = document.createElement("span");
+    modelSpan.className = "provider-model";
+    modelSpan.textContent = p.modelId;
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "btn-icon";
+    editBtn.textContent = "\u270E";
+    editBtn.title = "Edit";
+    editBtn.addEventListener("click", () => openEditPanel(p));
+
+    const delBtn = document.createElement("button");
+    delBtn.className = "btn-icon delete";
+    delBtn.textContent = "\u2715";
+    delBtn.title = "Delete";
+    delBtn.addEventListener("click", () => handleDelete(p.id));
+
+    row.append(radio, nameSpan, modelSpan, editBtn, delBtn);
+    listEl.appendChild(row);
+  }
 }
 
-// --- Save ---
-saveBtn.addEventListener('click', () => {
-  // Collect remote servers
-  const remote: Array<{ name: string; url: string; transport: string }> = [];
-  for (const entry of remoteServersDiv.querySelectorAll('.server-entry')) {
-    const name = (entry.querySelector('.rs-name') as HTMLInputElement).value.trim();
-    const url = (entry.querySelector('.rs-url') as HTMLInputElement).value.trim();
-    const transport = (entry.querySelector('.rs-transport') as HTMLSelectElement).value;
-    if (name && url) {
-      remote.push({ name, url, transport });
-    }
+function openEditPanel(provider?: ProviderConfig) {
+  editingId = provider?.id ?? null;
+  editName.value = provider?.name ?? "New Provider";
+  editApikey.value = provider?.apiKey ?? "";
+  editBaseurl.value = provider?.baseUrl ?? "https://integrate.api.nvidia.com/v1";
+  editModelid.value = provider?.modelId ?? "minimaxai/minimax-m2.7";
+  editPanel.classList.add("open");
+  editName.focus();
+}
+
+function closeEditPanel() {
+  editingId = null;
+  editPanel.classList.remove("open");
+}
+
+async function handleSave() {
+  const name = editName.value.trim();
+  if (!name) { showStatus("Name is required"); return; }
+
+  const { providers, activeProviderId } = await getAllProviders();
+
+  const config: ProviderConfig = {
+    id: editingId ?? createProvider().id,
+    name,
+    apiKey: editApikey.value,
+    baseUrl: editBaseurl.value,
+    modelId: editModelid.value,
+  };
+
+  let updated: ProviderConfig[];
+  if (editingId) {
+    updated = providers.map(p => p.id === editingId ? config : p);
+  } else {
+    updated = [...providers, config];
   }
 
-  // Collect bridge servers
-  const bridge: Array<{ name: string; command: string; args: string[] }> = [];
-  for (const entry of bridgeServersDiv.querySelectorAll('.server-entry')) {
-    const name = (entry.querySelector('.bs-name') as HTMLInputElement).value.trim();
-    const command = (entry.querySelector('.bs-command') as HTMLInputElement).value.trim();
-    const argsStr = (entry.querySelector('.bs-args') as HTMLInputElement).value.trim();
-    const args = argsStr ? argsStr.split(',').map(a => a.trim()) : [];
-    if (name && command) {
-      bridge.push({ name, command, args });
-    }
+  const newActiveId = editingId ? activeProviderId : config.id;
+  await saveProviders(updated, newActiveId);
+  closeEditPanel();
+  renderProviderList(updated, newActiveId);
+  showStatus(editingId ? "Provider updated" : "Provider added");
+}
+
+async function handleDelete(id: string) {
+  try {
+    await deleteProvider(id);
+    const { providers, activeProviderId } = await getAllProviders();
+    renderProviderList(providers, activeProviderId);
+    showStatus("Provider deleted");
+  } catch (e: any) {
+    showStatus(e.message);
   }
+}
 
-  chrome.storage.local.set({
-    apiKey: apiKeyInput.value,
-    baseUrl: baseUrlInput.value,
-    modelId: modelIdInput.value,
-    mcp_servers: { remote, bridge },
-  }, () => {
-    statusDiv.textContent = 'Settings saved!';
-    setTimeout(() => { statusDiv.textContent = ''; }, 2000);
+async function handleSetActive(id: string) {
+  await setActiveProvider(id);
+  const { providers, activeProviderId } = await getAllProviders();
+  renderProviderList(providers, activeProviderId);
+}
 
-    // Notify background to reload MCP connections
-    chrome.runtime.sendMessage({ type: 'MCP_RELOAD' });
-  });
-});
+addBtn.addEventListener("click", () => openEditPanel());
+editCancel.addEventListener("click", closeEditPanel);
+editSave.addEventListener("click", handleSave);
+
+// Init
+(async () => {
+  await migrateProviders();
+  const { providers, activeProviderId } = await getAllProviders();
+  renderProviderList(providers, activeProviderId);
+})();

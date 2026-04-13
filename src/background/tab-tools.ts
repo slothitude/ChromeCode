@@ -1,6 +1,7 @@
 export async function getActiveTabContent(): Promise<string> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id) throw new Error("No active tab found");
+  if (tab.url?.startsWith("chrome://")) return "(chrome:// page — no access)";
 
   const results = await chrome.scripting.executeScript({
     target: { tabId: tab.id },
