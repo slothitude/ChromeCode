@@ -64,6 +64,14 @@ function connect() {
       appendStatus("Playback " + msg.current + "/" + msg.total, "status-success");
     } else if (msg.type === "MACRO_PLAYBACK_DONE") {
       appendStatus("Playback complete", "status-success");
+    } else if (msg.type === "FOLDER_CONNECTED") {
+      connectedFolderPath.textContent = msg.path;
+      connectedFolderPath.classList.remove("hidden");
+      connectedFolderPath.title = msg.path;
+      connectFolderBtn.textContent = "Change Folder";
+      appendStatus("Folder connected: " + msg.path, "status-success");
+    } else if (msg.type === "FOLDER_CANCELLED") {
+      // User cancelled the dialog — do nothing
     }
   });
 
@@ -87,6 +95,8 @@ const macroRecordBtn = document.getElementById("macro-record-btn")! as HTMLButto
 const workflowToggle = document.getElementById("workflow-toggle")!;
 const workflowSection = document.getElementById("workflow-section")!;
 const macroListEl = document.getElementById("macro-list")!;
+const connectFolderBtn = document.getElementById("connect-folder")!;
+const connectedFolderPath = document.getElementById("connected-folder-path")!;
 
 function appendMessage(role: "user" | "assistant", text: string) {
   const div = document.createElement("div");
@@ -150,6 +160,15 @@ macroRecordBtn.addEventListener("click", () => {
     port.postMessage({ type: "STOP_MACRO_RECORD" });
   } else {
     port.postMessage({ type: "START_MACRO_RECORD" });
+  }
+});
+
+connectFolderBtn.addEventListener("click", () => {
+  try {
+    port.postMessage({ type: "CONNECT_FOLDER" });
+  } catch (e) {
+    connect();
+    setTimeout(() => port.postMessage({ type: "CONNECT_FOLDER" }), 100);
   }
 });
 

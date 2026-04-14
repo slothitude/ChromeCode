@@ -12,6 +12,10 @@ let bridgeSocket: WebSocket | null = null;
 // --- Cached tab content ---
 let cachedTabContent: string | null = null;
 
+// --- Connected folder ---
+let connectedFolder: string | null = null;
+let pendingFolderPickPort: chrome.runtime.Port | null = null;
+
 // --- Bridge Connection (optional — only connects if bridge is running) ---
 async function probeBridge(): Promise<boolean> {
   try {
@@ -51,6 +55,19 @@ async function connectToBridge() {
           bridgeSocket.send(JSON.stringify(msg));
         }
       });
+    } else if (data.type === "FOLDER_PICK_RESULT") {
+      if (data.path) {
+        connectedFolder = data.path;
+        if (pendingFolderPickPort) {
+          pendingFolderPickPort.postMessage({ type: "FOLDER_CONNECTED", path: connectedFolder });
+          pendingFolderPickPort = null;
+        }
+      } else {
+        if (pendingFolderPickPort) {
+          pendingFolderPickPort.postMessage({ type: "FOLDER_CANCELLED" });
+          pendingFolderPickPort = null;
+        }
+      }
     } else if (data.type === "DIRECT_REQUEST") {
       try {
         const result = await handleDirectOperation(data.operation, data.params);
@@ -323,8 +340,21 @@ To record the browser tab as a video:
 
 Use these when the user asks to record their screen or capture a video of what's happening in the tab.
 
+## Demo Scripts
+You have built-in demo effects that can be injected into any page with a <video> element (e.g. YouTube):
+
+| Effect | Description |
+|--------|-------------|
+| Pitch Variation | Sweeps playbackRate between 0.5x and 2.0x |
+| Audio Distortion | Waveshaper distortion on audio via Web Audio API |
+| VHS Shader | WebGL shader: chromatic aberration, scanlines, vignette |
+| Toon Shader | WebGL shader: posterized colors + Sobel edge outlines |
+
+When the user asks to apply a visual or audio effect to a video, offer these demos. To stop effects: pitch uses \`clearInterval(window.__pitchInterval); document.querySelector("video").playbackRate=1.0;\`, shaders can be removed with \`document.querySelectorAll("canvas[data-gl],#__toonCanvas").forEach(c=>c.remove()); document.querySelector("video").style.opacity="1";\`.
+
 Context:
-${cachedTabContent}`
+${cachedTabContent}
+${connectedFolder ? `\nConnected folder: ${connectedFolder}` : ''}`
     };
 
     const runLoop = async (input: string) => {
@@ -444,6 +474,13 @@ chrome.runtime.onConnect.addListener((port) => {
         macroManager.playDemo(msg.macro as Macro, tab.id);
       } else if (msg.type === "STOP_PLAYBACK") {
         macroManager.stopPlayback();
+      } else if (msg.type === "CONNECT_FOLDER") {
+        if (bridgeSocket?.readyState === WebSocket.OPEN) {
+          pendingFolderPickPort = port;
+          bridgeSocket.send(JSON.stringify({ type: "FOLDER_PICK_REQUEST" }));
+        } else {
+          port.postMessage({ type: "ERROR", message: "Bridge server not connected. Start the bridge server first." });
+        }
       }
     });
   }

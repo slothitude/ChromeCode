@@ -340,6 +340,8 @@ curl -X POST http://localhost:3001/tab/execute \
 
 ### YouTube Effects (`demos/youtube-effects/`)
 
+![YouTube Effects Demo](demos/youtube-effects/slothtube.png)
+
 Inject audio/video effects into any YouTube page via the bridge API:
 
 - **pitch-variation.js** — Sweeps playbackRate between 0.5x and 2.0x

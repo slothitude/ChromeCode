@@ -1,6 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import readline from 'readline';
+import { execFile } from 'child_process';
 
 const WS_PORT = 3000;
 const API_PORT = 3001;
@@ -52,6 +53,40 @@ function sendToExtension(msg: object): boolean {
   return true;
 }
 
+// --- Native folder picker ---
+function pickFolder(): Promise<{ path: string } | { cancelled: true }> {
+  return new Promise((resolve) => {
+    const platform = process.platform;
+    let cmd: string;
+    let args: string[];
+
+    if (platform === 'win32') {
+      cmd = 'powershell';
+      args = [
+        '-NoProfile', '-Command',
+        'Add-Type -AssemblyName System.Windows.Forms; $fb = New-Object System.Windows.Forms.FolderBrowserDialog; if ($fb.ShowDialog() -eq \'OK\') { $fb.SelectedPath } else { \'\' }'
+      ];
+    } else if (platform === 'darwin') {
+      cmd = 'osascript';
+      args = ['-e', 'POSIX path of (choose folder with prompt "Select folder")'];
+    } else {
+      // Linux — try zenity first
+      cmd = 'zenity';
+      args = ['--file-selection', '--directory'];
+    }
+
+    execFile(cmd, args, { timeout: 300000 }, (err, stdout) => {
+      if (err || !stdout || !stdout.trim()) {
+        resolve({ cancelled: true });
+        return;
+      }
+      // osascript returns path with trailing newline and sometimes alias coercion text
+      const path = stdout.trim();
+      resolve({ path });
+    });
+  });
+}
+
 // --- 1. WebSocket Server (for Extension) ---
 const wss = new WebSocketServer({ port: WS_PORT });
 
@@ -59,7 +94,7 @@ wss.on('connection', (ws) => {
   console.log('\n[Bridge] ChromeCode Extension connected.');
   extensionSocket = ws;
 
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     const msg = JSON.parse(data.toString());
 
     if (msg.type === 'AGENT_EVENT') {
@@ -97,6 +132,12 @@ wss.on('connection', (ws) => {
       console.error('\n[Bridge] Extension Error:', msg.message);
       if (requestId && pendingRequests.has(requestId)) {
         rejectRequest(requestId, new Error(msg.message));
+      }
+    } else if (msg.type === 'FOLDER_PICK_REQUEST') {
+      console.log('[Bridge] Folder pick requested by extension');
+      const result = await pickFolder();
+      if (extensionSocket?.readyState === WebSocket.OPEN) {
+        extensionSocket.send(JSON.stringify({ type: 'FOLDER_PICK_RESULT', ...result }));
       }
     }
   });
@@ -177,6 +218,7 @@ function matchRoute(method: string, url: string): { handler: (req: http.Incoming
     { method: 'GET',  path: '/recording/status',    handler: handleRecordingStatus },
     { method: 'POST', path: '/recording/start',     handler: handleRecordingStart },
     { method: 'POST', path: '/recording/stop',      handler: handleRecordingStop },
+    { method: 'POST', path: '/folder/pick',           handler: handleFolderPick },
   ];
 
   for (const route of routes) {
@@ -338,6 +380,15 @@ async function handleRecordingStop(_req: http.IncomingMessage, res: http.ServerR
     sendJSON(res, 200, data);
   } catch (e: any) {
     mapError(res, e);
+  }
+}
+
+async function handleFolderPick(_req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const result = await pickFolder();
+    sendJSON(res, 200, result);
+  } catch (e: any) {
+    sendJSON(res, 500, { error: e.message });
   }
 }
 
