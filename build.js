@@ -35,6 +35,15 @@ const contentScriptBuild = {
   format: 'iife',
 };
 
+const bridgeBuild = {
+  ...sharedConfig,
+  entryPoints: [{ in: 'src/bridge/server.ts', out: 'bridge/server' }],
+  platform: 'node',
+  format: 'esm',
+  target: ['node18'],
+  external: ['ws'],
+};
+
 function copyFiles() {
   if (!fs.existsSync('dist')) fs.mkdirSync('dist', { recursive: true });
   if (!fs.existsSync('dist/panel')) fs.mkdirSync('dist/panel', { recursive: true });
@@ -70,10 +79,19 @@ async function run() {
         },
       }],
     });
-    await Promise.all([ctx.watch(), contentCtx.watch()]);
+    const bridgeCtx = await esbuild.context({
+      ...bridgeBuild,
+      plugins: [{
+        name: 'on-rebuild-bridge',
+        setup(build) {
+          build.onEnd(() => console.log('Bridge rebuilt'));
+        },
+      }],
+    });
+    await Promise.all([ctx.watch(), contentCtx.watch(), bridgeCtx.watch()]);
     console.log('Watching for changes...');
   } else {
-    await Promise.all([esbuild.build(extensionBuild), esbuild.build(contentScriptBuild)]);
+    await Promise.all([esbuild.build(extensionBuild), esbuild.build(contentScriptBuild), esbuild.build(bridgeBuild)]);
     copyFiles();
     console.log('Build complete');
   }

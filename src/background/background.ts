@@ -1,9 +1,10 @@
 import { streamCompletion, type Message } from "./providers.js";
-import { getActiveTabContent, editActiveTab } from "./tab-tools.js";
+import { getActiveTabContent, editActiveTab, captureTabScreenshot, evaluateOnTab, getActiveTabContentStructured } from "./tab-tools.js";
 import * as recordingManager from "./recording-manager.js";
 import * as macroManager from "./macro-manager.js";
 import { getAllMacros, saveMacro, deleteMacro, renameMacro } from "../shared/macro-storage.js";
 import type { Macro } from "../shared/macro-types.js";
+import type { DirectOperation } from "../shared/bridge-protocol.js";
 
 let conversationHistory: Message[] = [];
 let bridgeSocket: WebSocket | null = null;
@@ -39,13 +40,28 @@ async function connectToBridge() {
 
   bridgeSocket.onmessage = async (event) => {
     const data = JSON.parse(event.data);
+    const requestId = data.requestId;
+
     if (data.type === "REMOTE_PROMPT") {
       console.log("Received remote prompt:", data.text);
       await handlePrompt(data.text, (agentEvent) => {
         if (bridgeSocket?.readyState === WebSocket.OPEN) {
-          bridgeSocket.send(JSON.stringify({ type: "AGENT_EVENT", event: agentEvent }));
+          const msg: any = { type: "AGENT_EVENT", event: agentEvent };
+          if (requestId) msg.requestId = requestId;
+          bridgeSocket.send(JSON.stringify(msg));
         }
       });
+    } else if (data.type === "DIRECT_REQUEST") {
+      try {
+        const result = await handleDirectOperation(data.operation, data.params);
+        if (bridgeSocket?.readyState === WebSocket.OPEN) {
+          bridgeSocket.send(JSON.stringify({ type: "DIRECT_RESPONSE", requestId: data.requestId, success: true, data: result }));
+        }
+      } catch (e: any) {
+        if (bridgeSocket?.readyState === WebSocket.OPEN) {
+          bridgeSocket.send(JSON.stringify({ type: "DIRECT_RESPONSE", requestId: data.requestId, success: false, error: e.message }));
+        }
+      }
     }
   };
 
@@ -90,7 +106,7 @@ async function executeMacroTool(subcommand: string, rawBody: string): Promise<st
     case "list": {
       const macros = await getAllMacros();
       if (macros.length === 0) return "No macros saved yet.";
-      return macros.map((m, i) => `${i + 1}. "${m.name}" (${m.steps.length} steps, ${(m.durationMs / 1000).toFixed(1)}s, from ${m.url})`).join("\n");
+      return macros.map((m, i) => `${i + 1}. "${m.name}" (${m.steps?.length ?? 0} steps, ${((m.durationMs || 0) / 1000).toFixed(1)}s, from ${m.url || "?"})`).join("\n");
     }
 
     case "play": {
@@ -164,6 +180,96 @@ async function executeRecordTool(subcommand: string): Promise<string> {
 
     default:
       throw new Error(`Unknown cc_record subcommand: "${subcommand}". Use: start, stop.`);
+  }
+}
+
+// --- Direct Operation Handler (bypasses LLM) ---
+
+async function handleDirectOperation(operation: DirectOperation, params?: Record<string, any>): Promise<any> {
+  switch (operation) {
+    case "tab.content": {
+      return getActiveTabContentStructured();
+    }
+    case "tab.screenshot": {
+      const dataUrl = await captureTabScreenshot();
+      return { dataUrl };
+    }
+    case "tab.execute": {
+      if (!params?.code) throw new Error("Missing 'code' parameter");
+      return editActiveTab(params.code);
+    }
+    case "tab.evaluate": {
+      if (!params?.expression) throw new Error("Missing 'expression' parameter");
+      return evaluateOnTab(params.expression);
+    }
+    case "macro.list": {
+      const macros = await getAllMacros();
+      return { macros };
+    }
+    case "macro.play": {
+      if (!params?.name) throw new Error("Missing 'name' parameter");
+      const macro = await findMacroByName(params.name);
+      const tabId = await getActiveTabId();
+      await macroManager.playMacro(macro, tabId);
+      return { success: true };
+    }
+    case "macro.record_start": {
+      if (macroManager.getIsRecording()) throw new Error("Already recording a macro");
+      const tabId = await getActiveTabId();
+      const result = await macroManager.startMacroRecording(tabId);
+      if (result.error) throw new Error(result.error);
+      return { success: true };
+    }
+    case "macro.record_stop": {
+      if (!macroManager.getIsRecording()) throw new Error("Not currently recording a macro");
+      if (!params?.name) throw new Error("Missing 'name' parameter");
+      const tabId = await getActiveTabId();
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      const result = macroManager.stopMacroRecording(tabId) as any;
+      if (result.error) throw new Error(result.error);
+      const macro: Macro = {
+        id: crypto.randomUUID(),
+        name: params.name,
+        url: tab?.url || "",
+        createdAt: Date.now(),
+        durationMs: result.durationMs,
+        steps: result.steps,
+      };
+      await saveMacro(macro);
+      return { success: true, steps: result.steps.length };
+    }
+    case "macro.delete": {
+      if (!params?.name) throw new Error("Missing 'name' parameter");
+      const macro = await findMacroByName(params.name);
+      await deleteMacro(macro.id);
+      return { success: true };
+    }
+    case "macro.demo": {
+      if (!params?.name) throw new Error("Missing 'name' parameter");
+      const m = await findMacroByName(params.name);
+      const tid = await getActiveTabId();
+      await macroManager.playDemo(m, tid);
+      return { success: true };
+    }
+    case "recording.start": {
+      if (recordingManager.getIsRecording()) throw new Error("Already recording");
+      await recordingManager.startRecording();
+      return { success: true };
+    }
+    case "recording.stop": {
+      if (!recordingManager.getIsRecording()) throw new Error("Not currently recording");
+      await recordingManager.stopRecording();
+      return { success: true };
+    }
+    case "recording.status": {
+      return {
+        recording: recordingManager.getIsRecording(),
+        macroRecording: macroManager.getIsRecording(),
+        macroPlaying: macroManager.getIsPlaying(),
+      };
+    }
+    default:
+      throw new Error(`Unknown operation: ${operation}`);
   }
 }
 
