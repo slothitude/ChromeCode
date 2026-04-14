@@ -51,8 +51,8 @@ src/
 
 - Builds a system prompt with the active tab's content (URL, title, innerText truncated to 5000 chars)
 - Streams the LLM response via SSE (`providers.ts`)
-- Parses responses for `` ```javascript:cc_live_edit ... ``` `` blocks
-- Executes matched blocks via `chrome.debugger.attach` → `Runtime.evaluate` → `detach`
+- Parses responses for fenced code blocks: `` ```javascript:cc_live_edit ``` ``, `` ```cc_macro:*``` ``, `` ```cc_record:*``` ``, `` ```cc_read``` ``, `` ```cc_ls``` ``
+- Executes matched blocks via `chrome.debugger.attach` → `Runtime.evaluate` → `detach` (live edits) or via bridge WebSocket (folder reads)
 - On execution failure, auto-retries with the error message appended to conversation history
 - Conversation history is in-memory only (resets when service worker restarts)
 
@@ -60,13 +60,30 @@ src/
 
 `tab-tools.ts:editActiveTab()` uses the Chrome Debugger protocol (`chrome.debugger`) to execute arbitrary JavaScript in the active tab. This bypasses CSP restrictions. The debugger is attached/detached per-call with cleanup in a catch block.
 
+### Folder Tools (`cc_read` / `cc_ls`)
+
+When a folder is connected (via the "Connect Folder" button → native OS picker → bridge server), the LLM can read files from it. Since Chrome extensions have no filesystem access, this goes through the bridge server over WebSocket.
+
+- **`cc_read`** — Read a file's contents. Path is relative to the connected folder.
+  - LLM outputs: `` ```cc_read\nsrc/index.ts\n``` ``
+  - Background sends `{ type: "FOLDER_READ_REQUEST", folderPath, filePath }` to bridge
+  - Bridge reads the file via `fs.readFileSync`, returns content string
+  - Security: path traversal check (`ensureInsideFolder`), 1MB max size, binary file rejection by extension and null-byte detection
+- **`cc_ls`** — List directory contents recursively with file sizes. Path is relative to connected folder, empty path lists root.
+  - LLM outputs: `` ```cc_ls\nsrc/\n``` ``
+  - Background sends `{ type: "FOLDER_LIST_REQUEST", folderPath, dirPath }` to bridge
+  - Bridge walks the directory via `fs.readdirSync`, skips `node_modules`/`.git`
+  - Returns array of `{ name, path, size, type }` entries
+
+Both tools use a pending-promise pattern (`sendFolderRequestAndAwait`) to correlate WebSocket request/response with a `requestId`. The bridge also exposes HTTP routes `POST /folder/read` and `POST /folder/list` for external use.
+
 ### Provider Configuration
 
 `providers.ts` reads `apiKey`, `baseUrl`, `modelId` from `chrome.storage.local`. Falls back to defaults defined in that file. The options page UI writes these settings.
 
 ## Key Conventions
 
-- `cc` prefix for extension-specific identifiers (e.g., `cc_live_edit`, `chromecode-panel`)
+- `cc` prefix for extension-specific identifiers (e.g., `cc_live_edit`, `cc_read`, `cc_ls`, `chromecode-panel`)
 - esbuild outputs ESM format targeting Chrome 100+
 - Entry points in `build.js` map `src/{component}/{component}.ts` → `dist/{component}/{component}.js`
 - Static assets (HTML, CSS, manifest, icons) are copied to `dist/` by `copyFiles()` in `build.js`
