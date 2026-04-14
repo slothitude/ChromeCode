@@ -338,6 +338,24 @@ curl -X POST http://localhost:3001/tab/execute \
 
 **Controls:** WASD/Arrows to move, Space/E to shoot, R to restart, backtick (`) to toggle.
 
+### YouTube Effects (`demos/youtube-effects/`)
+
+Inject audio/video effects into any YouTube page via the bridge API:
+
+- **pitch-variation.js** — Sweeps playbackRate between 0.5x and 2.0x
+- **audio-distortion.js** — Waveshaper distortion on audio
+- **vhs-shader.js** — VHS style: chromatic aberration, scanlines, vignette
+- **toon-shader.js** — Toon/cel shader: posterized colors + Sobel edge outlines
+
+```bash
+# Inject VHS effect onto active tab
+curl -X POST http://localhost:3001/tab/execute \
+  -H 'Content-Type: application/json' \
+  -d "{\"code\":\"$(cat demos/youtube-effects/vhs-shader.js)\"}"
+```
+
+See `demos/youtube-effects/README.md` for stop instructions and DevTools usage.
+
 ---
 
 ## License
