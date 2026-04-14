@@ -77,6 +77,22 @@ When a folder is connected (via the "Connect Folder" button → native OS picker
 
 Both tools use a pending-promise pattern (`sendFolderRequestAndAwait`) to correlate WebSocket request/response with a `requestId`. The bridge also exposes HTTP routes `POST /folder/read` and `POST /folder/list` for external use.
 
+### Folder Tools — Tested (HTTP API via `curl`)
+
+Verified end-to-end against a running bridge server with the project directory as the connected folder:
+
+| Test | Result |
+|------|--------|
+| `POST /folder/list` — list root | Returns recursive file tree with `{ name, path, size, type }` |
+| `POST /folder/list` — list `src/` subdirectory | Correctly scopes to subdirectory |
+| `POST /folder/read` — read `package.json` | Returns full file contents |
+| `POST /folder/read` — read nested `src/background/providers.ts` | Works with deep paths |
+| Path traversal `../etc/passwd` | **Blocked**: `"Path traversal detected"` |
+| Read non-existent file | **Error**: `ENOENT` |
+| Read binary `.png` file | **Blocked**: `"Binary file type (.png) cannot be read as text"` |
+| Missing `filePath` param | **Error**: `"Missing \"filePath\""` |
+| Missing `folderPath` param | **Error**: `"Missing \"folderPath\""` |
+
 ### Provider Configuration
 
 `providers.ts` reads `apiKey`, `baseUrl`, `modelId` from `chrome.storage.local`. Falls back to defaults defined in that file. The options page UI writes these settings.
