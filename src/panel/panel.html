@@ -10,10 +10,26 @@
     <header>
       <h1>ChromeCode</h1>
       <div class="actions">
+        <button id="workflow-toggle" title="Workflows">&#9776;</button>
+        <button id="macro-record-btn" title="Record Macro">&#9210;</button>
+        <button id="record-btn" title="Record Tab">🔴</button>
         <button id="clear-btn" title="Clear History">🧹</button>
         <button id="connect-folder">Connect Folder</button>
       </div>
     </header>
+    <div id="workflow-section" class="collapsed">
+      <div id="workflow-header">
+        <span>Workflows</span>
+        <span id="macro-step-count">0 steps</span>
+      </div>
+      <div id="workflow-body">
+        <div id="macro-list"></div>
+        <div id="macro-record-status" class="hidden">
+          <span class="recording-dot"></span>
+          <span>Recording...</span>
+        </div>
+      </div>
+    </div>
     <div id="chat-container">
       <div id="messages"></div>
     </div>
