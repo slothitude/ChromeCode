@@ -10,7 +10,9 @@
     "activeTab",
     "notifications",
     "userScripts",
-    "debugger"
+    "debugger",
+    "offscreen",
+    "downloads"
   ],
   "host_permissions": [
     "<all_urls>"
