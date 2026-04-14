@@ -2,6 +2,8 @@ import { WebSocketServer, WebSocket } from 'ws';
 import http from 'http';
 import readline from 'readline';
 import { execFile } from 'child_process';
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { join, resolve, relative, extname, sep } from 'path';
 
 const WS_PORT = 3000;
 const API_PORT = 3001;
@@ -87,6 +89,85 @@ function pickFolder(): Promise<{ path: string } | { cancelled: true }> {
   });
 }
 
+// --- File system helpers for connected folder ---
+const MAX_FILE_SIZE = 1024 * 1024; // 1MB
+
+const BINARY_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp',
+  '.mp3', '.mp4', '.wav', '.avi', '.mov', '.mkv', '.flv',
+  '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.exe', '.dll', '.so', '.dylib', '.bin',
+  '.woff', '.woff2', '.ttf', '.eot', '.otf',
+  '.sqlite', '.db', '.class', '.jar',
+]);
+
+function ensureInsideFolder(folderPath: string, targetPath: string): string {
+  const resolved = resolve(folderPath, targetPath);
+  const folder = resolve(folderPath);
+  if (resolved === folder) return resolved;
+  const prefix = folder.endsWith(sep) ? folder : folder + sep;
+  if (!resolved.startsWith(prefix)) {
+    throw new Error('Path traversal detected: path escapes the connected folder');
+  }
+  return resolved;
+}
+
+function readFileFromFolder(folderPath: string, filePath: string): string {
+  const resolved = ensureInsideFolder(folderPath, filePath);
+  const stat = statSync(resolved);
+  if (!stat.isFile()) throw new Error(`Not a file: ${filePath}`);
+  if (stat.size > MAX_FILE_SIZE) throw new Error(`File too large (${(stat.size / 1024).toFixed(0)}KB, max 1MB)`);
+
+  const ext = extname(resolved).toLowerCase();
+  if (BINARY_EXTENSIONS.has(ext)) throw new Error(`Binary file type (${ext}) cannot be read as text`);
+
+  const content = readFileSync(resolved, 'utf-8');
+  if (content.indexOf('\0') !== -1) throw new Error('File appears to be binary (contains null bytes)');
+
+  return content;
+}
+
+interface FileEntry {
+  name: string;
+  path: string;
+  size: number;
+  type: 'file' | 'directory';
+}
+
+function listFolderRecursive(folderPath: string, dirPath: string): FileEntry[] {
+  const resolved = ensureInsideFolder(folderPath, dirPath);
+  const entries: FileEntry[] = [];
+
+  let items;
+  try {
+    items = readdirSync(resolved, { withFileTypes: true });
+  } catch (e: any) {
+    throw new Error(`Cannot read directory: ${e.message}`);
+  }
+
+  for (const item of items) {
+    if (item.name === 'node_modules' || item.name === '.git') continue;
+
+    const fullPath = join(resolved, item.name);
+    const relativePath = relative(resolve(folderPath), fullPath).replace(/\\/g, '/');
+
+    if (item.isDirectory()) {
+      entries.push({ name: item.name, path: relativePath, size: 0, type: 'directory' });
+      entries.push(...listFolderRecursive(folderPath, relativePath));
+    } else if (item.isFile()) {
+      const stat = statSync(fullPath);
+      entries.push({ name: item.name, path: relativePath, size: stat.size, type: 'file' });
+    }
+  }
+
+  return entries;
+}
+
+function listFolder(folderPath: string, dirPath: string): FileEntry[] {
+  return listFolderRecursive(folderPath, dirPath || '.');
+}
+
 // --- 1. WebSocket Server (for Extension) ---
 const wss = new WebSocketServer({ port: WS_PORT });
 
@@ -138,6 +219,24 @@ wss.on('connection', (ws) => {
       const result = await pickFolder();
       if (extensionSocket?.readyState === WebSocket.OPEN) {
         extensionSocket.send(JSON.stringify({ type: 'FOLDER_PICK_RESULT', ...result }));
+      }
+    } else if (msg.type === 'FOLDER_READ_REQUEST') {
+      const { folderPath, filePath, requestId } = msg;
+      console.log(`[Bridge] Folder read request: ${filePath}`);
+      try {
+        const content = readFileFromFolder(folderPath, filePath);
+        ws.send(JSON.stringify({ type: 'FOLDER_READ_RESPONSE', requestId, success: true, content }));
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: 'FOLDER_READ_RESPONSE', requestId, success: false, error: e.message }));
+      }
+    } else if (msg.type === 'FOLDER_LIST_REQUEST') {
+      const { folderPath, dirPath, requestId } = msg;
+      console.log(`[Bridge] Folder list request: ${dirPath || '(root)'}`);
+      try {
+        const entries = listFolder(folderPath, dirPath || '');
+        ws.send(JSON.stringify({ type: 'FOLDER_LIST_RESPONSE', requestId, success: true, entries }));
+      } catch (e: any) {
+        ws.send(JSON.stringify({ type: 'FOLDER_LIST_RESPONSE', requestId, success: false, error: e.message }));
       }
     }
   });
@@ -219,6 +318,8 @@ function matchRoute(method: string, url: string): { handler: (req: http.Incoming
     { method: 'POST', path: '/recording/start',     handler: handleRecordingStart },
     { method: 'POST', path: '/recording/stop',      handler: handleRecordingStop },
     { method: 'POST', path: '/folder/pick',           handler: handleFolderPick },
+    { method: 'POST', path: '/folder/read',           handler: handleFolderRead },
+    { method: 'POST', path: '/folder/list',           handler: handleFolderList },
   ];
 
   for (const route of routes) {
@@ -389,6 +490,29 @@ async function handleFolderPick(_req: http.IncomingMessage, res: http.ServerResp
     sendJSON(res, 200, result);
   } catch (e: any) {
     sendJSON(res, 500, { error: e.message });
+  }
+}
+
+async function handleFolderRead(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const body = JSON.parse(await readBody(req));
+    if (!body.folderPath) { sendJSON(res, 400, { error: 'Missing "folderPath"' }); return; }
+    if (!body.filePath) { sendJSON(res, 400, { error: 'Missing "filePath"' }); return; }
+    const content = readFileFromFolder(body.folderPath, body.filePath);
+    sendJSON(res, 200, { content });
+  } catch (e: any) {
+    sendJSON(res, 400, { error: e.message });
+  }
+}
+
+async function handleFolderList(req: http.IncomingMessage, res: http.ServerResponse) {
+  try {
+    const body = JSON.parse(await readBody(req));
+    if (!body.folderPath) { sendJSON(res, 400, { error: 'Missing "folderPath"' }); return; }
+    const entries = listFolder(body.folderPath, body.dirPath || '');
+    sendJSON(res, 200, { entries });
+  } catch (e: any) {
+    sendJSON(res, 400, { error: e.message });
   }
 }
 

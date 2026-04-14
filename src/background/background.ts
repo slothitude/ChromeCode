@@ -16,6 +16,35 @@ let cachedTabContent: string | null = null;
 let connectedFolder: string | null = null;
 let pendingFolderPickPort: chrome.runtime.Port | null = null;
 
+// --- Pending folder tool requests ---
+interface PendingFolderRequest {
+  resolve: (data: any) => void;
+  reject: (err: Error) => void;
+  timeout: ReturnType<typeof setTimeout>;
+}
+
+const pendingFolderRequests = new Map<string, PendingFolderRequest>();
+
+function sendFolderRequestAndAwait(msgType: string, params: Record<string, any>, timeoutMs = 30000): Promise<any> {
+  const requestId = `folder_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  return new Promise((resolve, reject) => {
+    if (!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN) {
+      return reject(new Error('Bridge server not connected'));
+    }
+    if (!connectedFolder) {
+      return reject(new Error('No folder connected'));
+    }
+
+    const timeout = setTimeout(() => {
+      pendingFolderRequests.delete(requestId);
+      reject(new Error('Folder request timed out'));
+    }, timeoutMs);
+
+    pendingFolderRequests.set(requestId, { resolve, reject, timeout });
+    bridgeSocket.send(JSON.stringify({ type: msgType, requestId, folderPath: connectedFolder, ...params }));
+  });
+}
+
 // --- Bridge Connection (optional — only connects if bridge is running) ---
 async function probeBridge(): Promise<boolean> {
   try {
@@ -66,6 +95,17 @@ async function connectToBridge() {
         if (pendingFolderPickPort) {
           pendingFolderPickPort.postMessage({ type: "FOLDER_CANCELLED" });
           pendingFolderPickPort = null;
+        }
+      }
+    } else if (data.type === "FOLDER_READ_RESPONSE" || data.type === "FOLDER_LIST_RESPONSE") {
+      const pending = pendingFolderRequests.get(data.requestId);
+      if (pending) {
+        clearTimeout(pending.timeout);
+        pendingFolderRequests.delete(data.requestId);
+        if (data.success) {
+          pending.resolve(data);
+        } else {
+          pending.reject(new Error(data.error || 'Unknown folder operation error'));
         }
       }
     } else if (data.type === "DIRECT_REQUEST") {
@@ -198,6 +238,33 @@ async function executeRecordTool(subcommand: string): Promise<string> {
     default:
       throw new Error(`Unknown cc_record subcommand: "${subcommand}". Use: start, stop.`);
   }
+}
+
+// --- Folder Tools ---
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+}
+
+async function executeFolderTool(tool: string, rawBody: string): Promise<string> {
+  if (tool === "read") {
+    const filePath = rawBody.trim();
+    if (!filePath) throw new Error('Missing file path. Example: ```cc_read\nsrc/index.ts\n```');
+    const result = await sendFolderRequestAndAwait('FOLDER_READ_REQUEST', { filePath });
+    return result.content;
+  } else if (tool === "ls") {
+    const dirPath = rawBody.trim();
+    const result = await sendFolderRequestAndAwait('FOLDER_LIST_REQUEST', { dirPath: dirPath || '' });
+    const entries = result.entries;
+    if (entries.length === 0) return "Empty directory.";
+    return entries.map((e: any) => {
+      const suffix = e.type === 'file' ? ` (${formatFileSize(e.size)})` : '/';
+      return `${e.path}${suffix}`;
+    }).join('\n');
+  }
+  throw new Error(`Unknown folder tool: "${tool}". Use: read, ls.`);
 }
 
 // --- Direct Operation Handler (bypasses LLM) ---
@@ -354,7 +421,20 @@ When the user asks to apply a visual or audio effect to a video, offer these dem
 
 Context:
 ${cachedTabContent}
-${connectedFolder ? `\nConnected folder: ${connectedFolder}` : ''}`
+${connectedFolder ? `
+## Folder Tools
+A folder is connected at: ${connectedFolder}
+
+| Command | Block Format | Description |
+|---------|-------------|-------------|
+| List files | \`\`\`cc_ls
+src/
+\`\`\` | List directory contents recursively (relative path, empty = root) |
+| Read file | \`\`\`cc_read
+src/index.ts
+\`\`\` | Read file contents (relative path) |
+
+Use these when the user asks about files in the connected folder. List directories first to understand the structure, then read specific files.` : ''}`
     };
 
     const runLoop = async (input: string) => {
@@ -372,6 +452,8 @@ ${connectedFolder ? `\nConnected folder: ${connectedFolder}` : ''}`
       const editMatch = fullResponse.match(/```javascript:cc_live_edit\s*([\s\S]*?)```/i);
       const macroMatch = fullResponse.match(/```cc_macro:(\w+)\s*([\s\S]*?)```/i);
       const recordMatch = fullResponse.match(/```cc_record:(\w+)\s*([\s\S]*?)```/i);
+      const folderReadMatch = fullResponse.match(/```cc_read\s*([\s\S]*?)```/i);
+      const folderLsMatch = fullResponse.match(/```cc_ls\s*([\s\S]*?)```/i);
 
       if (editMatch && editMatch[1]) {
         const result = await editActiveTab(editMatch[1].trim());
@@ -406,6 +488,24 @@ ${connectedFolder ? `\nConnected folder: ${connectedFolder}` : ''}`
         } catch (e: any) {
           onEvent({ type: "text_delta", delta: `\n\n❌ Error: ${e.message}\nRetrying...` });
           await runLoop(`The recording tool "${subcommand}" failed: ${e.message}. Try again.`);
+        }
+      } else if (folderReadMatch) {
+        const filePath = folderReadMatch[1]?.trim() || "";
+        try {
+          const result = await executeFolderTool("read", filePath);
+          await runLoop(`File contents of ${filePath}:\n\`\`\`\n${result}\n\`\`\``);
+        } catch (e: any) {
+          onEvent({ type: "text_delta", delta: `\n\n❌ Error: ${e.message}\nRetrying...` });
+          await runLoop(`Reading file "${filePath}" failed: ${e.message}. Try again.`);
+        }
+      } else if (folderLsMatch) {
+        const dirPath = folderLsMatch[1]?.trim() || "";
+        try {
+          const result = await executeFolderTool("ls", dirPath);
+          await runLoop(`Directory listing of "${dirPath || '/'}":\n${result}`);
+        } catch (e: any) {
+          onEvent({ type: "text_delta", delta: `\n\n❌ Error: ${e.message}\nRetrying...` });
+          await runLoop(`Listing directory "${dirPath}" failed: ${e.message}. Try again.`);
         }
       }
     };
